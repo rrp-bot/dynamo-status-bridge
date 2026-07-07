@@ -25,6 +25,7 @@ MC_NAME="${MC_NAME:-mc01}"
 LAMBDA_NAME="dynamo-status-bridge"
 REPO_NAME="dynamo-status-bridge"
 DOCKER_CMD="${DOCKER_CMD:-docker}"
+LOCALSTACK_CONTAINER="${LOCALSTACK_CONTAINER:-localstack-dynamo-status-bridge}"
 
 DB_INSTANCE_ID="statusbridge"
 DB_NAME="statusbridge"
@@ -85,9 +86,10 @@ RDS_PORT=$(awslocal rds describe-db-instances \
 
 echo "    RDS endpoint: ${RDS_HOST}:${RDS_PORT}"
 
-# DSN for the Lambda container — reaches RDS inside LocalStack via the
-# LocalStack internal hostname. USE_IAM_AUTH=false for local testing.
-LAMBDA_POSTGRES_DSN="postgres://${DB_USER}:${DB_PASSWORD}@${RDS_HOST}:${RDS_PORT}/${DB_NAME}?sslmode=disable"
+# DSN for the Lambda container — it runs inside the Docker network and must
+# reach RDS via the LocalStack container name, not localhost.localstack.cloud
+# (which resolves to 127.0.0.1 = the host, unreachable from inside the network).
+LAMBDA_POSTGRES_DSN="postgres://${DB_USER}:${DB_PASSWORD}@${LOCALSTACK_CONTAINER}:${RDS_PORT}/${DB_NAME}?sslmode=disable"
 
 # DSN for the test process on the host — RDS port is exposed on localhost.
 HOST_POSTGRES_DSN="postgres://${DB_USER}:${DB_PASSWORD}@localhost:${RDS_PORT}/${DB_NAME}?sslmode=disable"
@@ -204,7 +206,7 @@ if [[ "${STATE}" != "Active" ]]; then
   echo "ERROR: Lambda failed to become active."
   echo ""
   echo "==> LocalStack logs (last 80 lines):"
-  "${DOCKER_CMD}" logs localstack-dynamo-status-bridge 2>&1 | tail -80
+  "${DOCKER_CMD}" logs "${LOCALSTACK_CONTAINER}" 2>&1 | tail -80
   exit 1
 fi
 echo "    Lambda is active."
