@@ -1,8 +1,9 @@
 BINARY     := bootstrap
 CMD        := ./cmd/lambda
 IMAGE_NAME := dynamo-status-bridge
+DOCKER_CMD ?= docker
 
-.PHONY: build test integration-test e2e localstack postgres setup-localstack docker-build docker-push clean
+.PHONY: build test integration-test e2e localstack postgres setup-localstack docker-build docker-push gosum clean
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -o $(BINARY) $(CMD)
@@ -36,13 +37,20 @@ postgres:
 setup-localstack:
 	./hack/setup-localstack.sh
 
+# gosum: generate go.sum by running go mod tidy inside the builder image.
+# Use this if you don't have Go installed locally.
+gosum:
+	$(DOCKER_CMD) run --rm -v "$(PWD):/app:Z" -w /app --user root \
+		registry.access.redhat.com/ubi9/go-toolset:9.8-1782219569 \
+		go mod tidy
+
 docker-build:
-	docker build -t $(IMAGE_NAME):latest .
+	$(DOCKER_CMD) build -t $(IMAGE_NAME):latest .
 
 docker-push:
 	@test -n "$(IMAGE_URI)" || (echo "IMAGE_URI is required, e.g. make docker-push IMAGE_URI=123456789.dkr.ecr.us-east-1.amazonaws.com/dynamo-status-bridge:abc123" && exit 1)
-	docker tag $(IMAGE_NAME):latest $(IMAGE_URI)
-	docker push $(IMAGE_URI)
+	$(DOCKER_CMD) tag $(IMAGE_NAME):latest $(IMAGE_URI)
+	$(DOCKER_CMD) push $(IMAGE_URI)
 
 clean:
 	rm -f $(BINARY)
