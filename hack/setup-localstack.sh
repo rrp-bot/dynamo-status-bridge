@@ -19,7 +19,6 @@
 set -euo pipefail
 
 ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
-PORT="${ENDPOINT##*:}"   # extract port from endpoint URL
 REGION="us-east-1"
 ACCOUNT="000000000000"
 MC_NAME="${MC_NAME:-mc01}"
@@ -117,16 +116,9 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 # ---------------------------------------------------------------------------
 # 4. Login to local ECR and push image
 # ---------------------------------------------------------------------------
+# LocalStack's ECR hostname (*.localhost.localstack.cloud) resolves to 127.0.0.1
+# via public DNS. Podman requires --tls-verify=false for self-signed/HTTP registries.
 ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud:4566"
-
-# *.localhost.localstack.cloud should resolve to 127.0.0.1 via public DNS,
-# but corporate DNS / split-horizon setups often block it. Add a /etc/hosts
-# entry if missing so podman can reach it without external DNS.
-if ! getent hosts "${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud" >/dev/null 2>&1; then
-  echo "==> Adding ${ECR_REGISTRY} to /etc/hosts (requires sudo)"
-  echo "127.0.0.1 ${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud" \
-    | sudo tee -a /etc/hosts >/dev/null
-fi
 
 # Detect whether the runtime supports --tls-verify (podman yes, docker no).
 if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
@@ -148,7 +140,6 @@ echo "==> Tagging and pushing (${FULL_IMAGE_URI})"
 "${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${FULL_IMAGE_URI}"
 "${DOCKER_CMD}" push ${TLS_FLAG} "${FULL_IMAGE_URI}"
 
-# Lambda ImageUri uses the same full ECR URI.
 IMAGE_URI="${FULL_IMAGE_URI}"
 echo "    Image URI: ${IMAGE_URI}"
 
