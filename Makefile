@@ -2,7 +2,7 @@ BINARY     := bootstrap
 CMD        := ./cmd/lambda
 IMAGE_NAME := dynamo-status-bridge
 
-.PHONY: build test integration-test localstack postgres docker-build docker-push
+.PHONY: build test integration-test e2e localstack postgres setup-localstack docker-build docker-push clean
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -o $(BINARY) $(CMD)
@@ -10,14 +10,28 @@ build:
 test:
 	go test ./... -count=1
 
+# integration-test: runs handler tests directly against a local Postgres.
+# Requires: POSTGRES_DSN
 integration-test:
 	go test ./test/integration/... -v -count=1 -timeout 120s
+
+# e2e: runs end-to-end tests against the Lambda running inside LocalStack.
+# Requires: LOCALSTACK_ENDPOINT, POSTGRES_DSN, MC_NAME (default: mc01)
+# Run hack/start-localstack.sh + hack/start-postgres.sh + hack/setup-localstack.sh first.
+e2e:
+	go test ./test/e2e/... -v -count=1 -timeout 180s
 
 localstack:
 	./hack/start-localstack.sh
 
 postgres:
 	./hack/start-postgres.sh
+
+# setup-localstack: builds + pushes image to local ECR, creates DynamoDB tables,
+# Lambda function, and event source mappings. Requires LocalStack + Postgres running.
+# Requires: LOCALSTACK_ENDPOINT, LAMBDA_POSTGRES_DSN
+setup-localstack:
+	./hack/setup-localstack.sh
 
 docker-build:
 	docker build -t $(IMAGE_NAME):latest .
