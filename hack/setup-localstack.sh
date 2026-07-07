@@ -19,6 +19,7 @@
 set -euo pipefail
 
 ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+PORT="${ENDPOINT##*:}"   # extract port from endpoint URL
 REGION="us-east-1"
 ACCOUNT="000000000000"
 MC_NAME="${MC_NAME:-mc01}"
@@ -106,6 +107,12 @@ REPO_URI=$(awslocal ecr create-repository \
     --output text)
 echo "    Repository URI: ${REPO_URI}"
 
+# LocalStack ECR is served over plain HTTP on localhost. The full
+# repository URI uses a long hostname that may not resolve locally.
+# Push using localhost:PORT instead, with TLS verification disabled.
+LOCALSTACK_HOST="localhost:${PORT}"
+LOCAL_PUSH_URI="${LOCALSTACK_HOST}/${REPO_NAME}:latest"
+
 # ---------------------------------------------------------------------------
 # 3. Build the Lambda image
 # ---------------------------------------------------------------------------
@@ -114,11 +121,17 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 "${DOCKER_CMD}" build -t "${REPO_NAME}:latest" "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
-# 4. Push to local ECR
+# 4. Push to local ECR via localhost (avoids DNS/TLS issues with ECR hostname)
 # ---------------------------------------------------------------------------
-echo "==> Tagging and pushing to local ECR"
-"${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${REPO_URI}:latest"
-"${DOCKER_CMD}" push "${REPO_URI}:latest"
+echo "==> Tagging and pushing to local ECR (${LOCAL_PUSH_URI})"
+"${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${LOCAL_PUSH_URI}"
+if [[ "${DOCKER_CMD}" == "podman" ]]; then
+  "${DOCKER_CMD}" push --tls-verify=false "${LOCAL_PUSH_URI}"
+else
+  "${DOCKER_CMD}" push "${LOCAL_PUSH_URI}"
+fi
+
+# Lambda ImageUri must use the full ECR URI format that LocalStack expects.
 IMAGE_URI="${REPO_URI}:latest"
 echo "    Image URI: ${IMAGE_URI}"
 
