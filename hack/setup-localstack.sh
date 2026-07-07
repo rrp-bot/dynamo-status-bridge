@@ -121,15 +121,18 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 "${DOCKER_CMD}" build -t "${REPO_NAME}:latest" "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
-# 4. Push to local ECR via localhost (avoids DNS/TLS issues with ECR hostname)
+# 4. Push to local ECR via 127.0.0.1 (avoids DNS/TLS issues with ECR hostname)
 # ---------------------------------------------------------------------------
 echo "==> Tagging and pushing to local ECR (${LOCAL_PUSH_URI})"
 "${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${LOCAL_PUSH_URI}"
-if [[ "${DOCKER_CMD}" == "podman" ]]; then
-  "${DOCKER_CMD}" push --tls-verify=false "${LOCAL_PUSH_URI}"
-else
-  "${DOCKER_CMD}" push "${LOCAL_PUSH_URI}"
+# LocalStack ECR is plain HTTP. Podman requires --tls-verify=false to push
+# over HTTP/self-signed TLS. Docker requires --insecure-registry in its
+# daemon config, but skips TLS errors against localhost automatically.
+PUSH_EXTRA_ARGS=""
+if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
+  PUSH_EXTRA_ARGS="--tls-verify=false"
 fi
+"${DOCKER_CMD}" push ${PUSH_EXTRA_ARGS} "${LOCAL_PUSH_URI}"
 
 # Lambda ImageUri must use the full ECR URI format that LocalStack expects.
 IMAGE_URI="${REPO_URI}:latest"
