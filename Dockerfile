@@ -9,3 +9,4 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1782191395
 COPY --from=builder /bootstrap /bootstrap
 USER 65532:65532
 ENTRYPOINT ["/bootstrap"]
+CMD [""]
