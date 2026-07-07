@@ -116,9 +116,14 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 # ---------------------------------------------------------------------------
 # 4. Login to local ECR and push image
 # ---------------------------------------------------------------------------
-# LocalStack's ECR hostname (*.localhost.localstack.cloud) resolves to 127.0.0.1
-# via public DNS. Podman requires --tls-verify=false for self-signed/HTTP registries.
-ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud:4566"
+# Extract the host from LOCALSTACK_ENDPOINT so pushes go to the same host
+# that LocalStack is actually running on (important in VM environments where
+# *.localhost.localstack.cloud resolves to 127.0.0.1 which is the VM loopback,
+# not the host running LocalStack).
+LOCALSTACK_HOST="${ENDPOINT#http://}"   # strip scheme
+LOCALSTACK_HOST="${LOCALSTACK_HOST#https://}"
+LOCALSTACK_HOST="${LOCALSTACK_HOST%%/*}"  # strip any path
+ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.${LOCALSTACK_HOST}"
 
 # Detect whether the runtime supports --tls-verify (podman yes, docker no).
 if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
