@@ -64,7 +64,7 @@ echo "  Socket: ${DOCKER_SOCKET}"
   -e "LAMBDA_DOCKER_NETWORK=${NETWORK}" \
   -e "DOCKER_HOST=unix:///var/run/docker.sock" \
   -e "LAMBDA_REMOVE_CONTAINERS=true" \
-  -e "DEBUG=0" \
+  -e "DEBUG=1" \
   --user 0 \
   --privileged \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock:Z" \

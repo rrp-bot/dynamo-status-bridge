@@ -193,7 +193,15 @@ else
 fi
 
 echo "==> Waiting for Lambda to become active..."
-awslocal lambda wait function-active-v2 --function-name "${LAMBDA_NAME}"
+if ! awslocal lambda wait function-active-v2 --function-name "${LAMBDA_NAME}"; then
+  echo "ERROR: Lambda failed to become active. Function state:"
+  awslocal lambda get-function-configuration --function-name "${LAMBDA_NAME}" \
+    --query '{State: State, StateReason: StateReason, StateReasonCode: StateReasonCode}'
+  echo ""
+  echo "LocalStack logs (last 50 lines):"
+  "${DOCKER_CMD}" logs localstack-dynamo-status-bridge 2>&1 | tail -50
+  exit 1
+fi
 echo "    Lambda is active."
 
 # ---------------------------------------------------------------------------
