@@ -116,7 +116,9 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 # ---------------------------------------------------------------------------
 # 4. Login to local ECR and push image
 # ---------------------------------------------------------------------------
-ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud:4566"
+# ECR_ENDPOINT_STRATEGY=off gives a simple URI: localhost.localstack.cloud:PORT/repo
+# which avoids the long account/region hostname that requires DNS resolution.
+ECR_REGISTRY="localhost.localstack.cloud:4566"
 
 # Detect whether the runtime supports --tls-verify (podman yes, docker no).
 if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
