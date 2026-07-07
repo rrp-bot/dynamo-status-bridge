@@ -110,7 +110,7 @@ echo "    Repository URI: ${REPO_URI}"
 # LocalStack ECR is served over plain HTTP on localhost. The full
 # repository URI uses a long hostname that may not resolve locally.
 # Push using localhost:PORT instead, with TLS verification disabled.
-LOCALSTACK_HOST="localhost:${PORT}"
+LOCALSTACK_HOST="127.0.0.1:${PORT}"
 LOCAL_PUSH_URI="${LOCALSTACK_HOST}/${REPO_NAME}:latest"
 
 # ---------------------------------------------------------------------------
