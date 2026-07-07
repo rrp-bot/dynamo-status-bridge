@@ -31,6 +31,12 @@ DB_NAME="statusbridge"
 DB_USER="statusbridge"
 DB_PASSWORD="statusbridge"
 
+# LocalStack doesn't validate credentials but the AWS CLI requires them to be
+# set. Inject dummy values so the CLI doesn't bail out before hitting the endpoint.
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
+export AWS_DEFAULT_REGION="${REGION}"
+
 AWS_ARGS="--endpoint-url=${ENDPOINT} --region=${REGION} --no-cli-pager"
 awslocal() { aws ${AWS_ARGS} "$@"; }
 
