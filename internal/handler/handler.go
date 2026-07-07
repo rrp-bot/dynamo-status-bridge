@@ -25,27 +25,90 @@ func New(writer *db.Writer) *Handler {
 // Handle processes a batch of DynamoDB stream records.
 // It returns a DynamoDBEventResponse so that Lambda can perform partial batch
 // failure reporting: only failed records are retried, not the whole batch.
+//
+// Within a batch, DynamoDB guarantees records are ordered oldest-to-newest
+// within a shard. We deduplicate by documentID, keeping only the newest record
+// for each item — intermediate updates carry no additional information.
+// If the newest record for an item fails, all skipped older records for that
+// same item are also reported as failures so Lambda retries them.
 func (h *Handler) Handle(ctx context.Context, event events.DynamoDBEvent) (events.DynamoDBEventResponse, error) {
 	var response events.DynamoDBEventResponse
 
-	for _, record := range event.Records {
-		if err := h.processRecord(ctx, record); err != nil {
+	// dedupe: iterate oldest-to-newest; later records overwrite earlier ones.
+	// skipped maps documentID -> all sequence numbers superseded by a newer record.
+	type entry struct {
+		record   events.DynamoDBEventRecord
+		skipped  []string // sequence numbers of older records for this documentID
+	}
+	seen := make(map[string]*entry, len(event.Records))
+
+	for i := range event.Records {
+		rec := event.Records[i]
+		docID := recordDocumentID(rec)
+		if docID == "" {
+			// Can't deduplicate without a key — process immediately.
+			if err := h.processRecord(ctx, rec); err != nil {
+				slog.Error("failed to process record",
+					"eventID", rec.EventID,
+					"eventName", rec.EventName,
+					"error", err,
+				)
+				response.BatchItemFailures = append(response.BatchItemFailures,
+					events.DynamoDBBatchItemFailure{ItemIdentifier: rec.Change.SequenceNumber},
+				)
+			}
+			continue
+		}
+
+		if existing, ok := seen[docID]; ok {
+			slog.Debug("skipping superseded record",
+				"documentID", docID,
+				"skippedSeqNo", existing.record.Change.SequenceNumber,
+				"newerSeqNo", rec.Change.SequenceNumber,
+			)
+			existing.skipped = append(existing.skipped, existing.record.Change.SequenceNumber)
+			existing.record = rec
+		} else {
+			seen[docID] = &entry{record: rec}
+		}
+	}
+
+	// Process one (newest) record per documentID.
+	for docID, e := range seen {
+		if err := h.processRecord(ctx, e.record); err != nil {
 			slog.Error("failed to process record",
-				"eventID", record.EventID,
-				"eventName", record.EventName,
-				"streamARN", record.EventSourceArn,
+				"documentID", docID,
+				"eventID", e.record.EventID,
+				"eventName", e.record.EventName,
+				"streamARN", e.record.EventSourceArn,
 				"error", err,
 			)
-			// Report this record as a failure so Lambda retries it individually.
+			// Report the failed record and all skipped predecessors — Lambda
+			// will retry from the earliest failed sequence number.
 			response.BatchItemFailures = append(response.BatchItemFailures,
-				events.DynamoDBBatchItemFailure{
-					ItemIdentifier: record.Change.SequenceNumber,
-				},
+				events.DynamoDBBatchItemFailure{ItemIdentifier: e.record.Change.SequenceNumber},
 			)
+			for _, seqNo := range e.skipped {
+				response.BatchItemFailures = append(response.BatchItemFailures,
+					events.DynamoDBBatchItemFailure{ItemIdentifier: seqNo},
+				)
+			}
 		}
 	}
 
 	return response, nil
+}
+
+// recordDocumentID returns the documentID for a stream record, checking both
+// NewImage (INSERT/MODIFY) and OldImage (REMOVE).
+func recordDocumentID(rec events.DynamoDBEventRecord) string {
+	if v, ok := rec.Change.NewImage["documentID"]; ok {
+		return v.String()
+	}
+	if v, ok := rec.Change.OldImage["documentID"]; ok {
+		return v.String()
+	}
+	return ""
 }
 
 // processRecord handles a single stream record.

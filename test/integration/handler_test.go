@@ -125,6 +125,22 @@ func makeEvent(streamARN, eventName string, image map[string]events.DynamoDBAttr
 	return events.DynamoDBEvent{Records: []events.DynamoDBEventRecord{rec}}
 }
 
+func makeRecord(streamARN, eventName, seqNo string, image map[string]events.DynamoDBAttributeValue) events.DynamoDBEventRecord {
+	rec := events.DynamoDBEventRecord{
+		EventName:      eventName,
+		EventSourceArn: streamARN,
+		Change: events.DynamoDBStreamRecord{
+			SequenceNumber: seqNo,
+		},
+	}
+	if eventName == "REMOVE" {
+		rec.Change.OldImage = image
+	} else {
+		rec.Change.NewImage = image
+	}
+	return rec
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -318,4 +334,68 @@ func TestIntegration_BatchItemFailure_BadRecord(t *testing.T) {
 	if len(resp.BatchItemFailures) != 1 {
 		t.Errorf("expected 1 BatchItemFailure, got %d", len(resp.BatchItemFailures))
 	}
+}
+
+// TestIntegration_BatchDedup verifies that when the same documentID appears
+// multiple times in a batch, only the newest record is processed and the DB
+// reflects the final state.
+func TestIntegration_BatchDedup(t *testing.T) {
+	requireIntegration(t)
+	client, writer := setupDB(t)
+	h := handler.New(writer)
+	ctx := context.Background()
+
+	streamARN := fmt.Sprintf("arn:aws:dynamodb:us-east-1:123456789012:table/mc01-status-applydesires/stream/%s", time.Now().Format("2006-01-02T15:04:05"))
+	docID := fmt.Sprintf("test-dedup-%d", time.Now().UnixNano())
+
+	// Three INSERT/MODIFY records for the same documentID in oldest→newest order.
+	// The final (newest) record has appliedResourceGeneration=99 — that's what
+	// should land in Postgres regardless of intermediate values.
+	img1 := buildBaseImage(docID, "mc01", "cluster-abc", streamARN)
+	img1["status"] = makeMapAttr(map[string]events.DynamoDBAttributeValue{
+		"appliedResourceGeneration": makeNumberAttr("1"),
+		"conditions":                makeListAttr(nil),
+	})
+	img2 := buildBaseImage(docID, "mc01", "cluster-abc", streamARN)
+	img2["status"] = makeMapAttr(map[string]events.DynamoDBAttributeValue{
+		"appliedResourceGeneration": makeNumberAttr("50"),
+		"conditions":                makeListAttr(nil),
+	})
+	img3 := buildBaseImage(docID, "mc01", "cluster-abc", streamARN)
+	img3["status"] = makeMapAttr(map[string]events.DynamoDBAttributeValue{
+		"appliedResourceGeneration": makeNumberAttr("99"),
+		"conditions":                makeListAttr(nil),
+	})
+
+	batch := events.DynamoDBEvent{
+		Records: []events.DynamoDBEventRecord{
+			makeRecord(streamARN, "INSERT", "seq-001", img1),
+			makeRecord(streamARN, "MODIFY", "seq-002", img2),
+			makeRecord(streamARN, "MODIFY", "seq-003", img3),
+		},
+	}
+
+	resp, err := h.Handle(ctx, batch)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(resp.BatchItemFailures) > 0 {
+		t.Fatalf("unexpected failures: %v", resp.BatchItemFailures)
+	}
+
+	row := queryRow(t, client.Pool(),
+		`SELECT applied_resource_generation FROM apply_desire_statuses WHERE document_id=$1 AND management_cluster=$2`,
+		docID, "mc01",
+	)
+	if row == nil {
+		t.Fatal("expected row in apply_desire_statuses, got none")
+	}
+	if fmt.Sprintf("%v", row["applied_resource_generation"]) != "99" {
+		t.Errorf("applied_resource_generation: got %v, want 99 (newest record should win)", row["applied_resource_generation"])
+	}
+
+	// Clean up.
+	_, _ = h.Handle(ctx, events.DynamoDBEvent{
+		Records: []events.DynamoDBEventRecord{makeRecord(streamARN, "REMOVE", "seq-004", img3)},
+	})
 }
