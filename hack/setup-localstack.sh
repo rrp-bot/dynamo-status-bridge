@@ -107,12 +107,6 @@ REPO_URI=$(awslocal ecr create-repository \
     --output text)
 echo "    Repository URI: ${REPO_URI}"
 
-# LocalStack ECR is served over plain HTTP on localhost. The full
-# repository URI uses a long hostname that may not resolve locally.
-# Push using localhost:PORT instead, with TLS verification disabled.
-LOCALSTACK_HOST="127.0.0.1:${PORT}"
-LOCAL_PUSH_URI="${LOCALSTACK_HOST}/${REPO_NAME}:latest"
-
 # ---------------------------------------------------------------------------
 # 3. Build the Lambda image
 # ---------------------------------------------------------------------------
@@ -121,21 +115,34 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 "${DOCKER_CMD}" build -t "${REPO_NAME}:latest" "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
-# 4. Push to local ECR via 127.0.0.1 (avoids DNS/TLS issues with ECR hostname)
+# 4. Login to local ECR and push image
 # ---------------------------------------------------------------------------
-echo "==> Tagging and pushing to local ECR (${LOCAL_PUSH_URI})"
-"${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${LOCAL_PUSH_URI}"
-# LocalStack ECR is plain HTTP. Podman requires --tls-verify=false to push
-# over HTTP/self-signed TLS. Docker requires --insecure-registry in its
-# daemon config, but skips TLS errors against localhost automatically.
-PUSH_EXTRA_ARGS=""
-if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
-  PUSH_EXTRA_ARGS="--tls-verify=false"
-fi
-"${DOCKER_CMD}" push ${PUSH_EXTRA_ARGS} "${LOCAL_PUSH_URI}"
+# LocalStack's ECR hostname (*.localhost.localstack.cloud) resolves to 127.0.0.1
+# via public DNS. Podman requires --tls-verify=false for self-signed/HTTP registries.
+ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud:4566"
 
-# Lambda ImageUri must use the full ECR URI format that LocalStack expects.
-IMAGE_URI="${REPO_URI}:latest"
+# Detect whether the runtime supports --tls-verify (podman yes, docker no).
+if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
+  TLS_FLAG="--tls-verify=false"
+else
+  TLS_FLAG=""
+fi
+
+echo "==> Logging in to local ECR (${ECR_REGISTRY})"
+awslocal ecr get-login-password \
+  | "${DOCKER_CMD}" login \
+      --username AWS \
+      --password-stdin \
+      ${TLS_FLAG} \
+      "${ECR_REGISTRY}"
+
+FULL_IMAGE_URI="${ECR_REGISTRY}/${REPO_NAME}:latest"
+echo "==> Tagging and pushing (${FULL_IMAGE_URI})"
+"${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${FULL_IMAGE_URI}"
+"${DOCKER_CMD}" push ${TLS_FLAG} "${FULL_IMAGE_URI}"
+
+# Lambda ImageUri uses the same full ECR URI.
+IMAGE_URI="${FULL_IMAGE_URI}"
 echo "    Image URI: ${IMAGE_URI}"
 
 # ---------------------------------------------------------------------------
