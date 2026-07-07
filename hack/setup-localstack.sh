@@ -116,29 +116,27 @@ echo "==> Building Lambda image from ${REPO_ROOT}"
 # ---------------------------------------------------------------------------
 # 4. Login to local ECR and push image
 # ---------------------------------------------------------------------------
-# ECR_ENDPOINT_STRATEGY=off gives a simple URI: localhost.localstack.cloud:PORT/repo
-# which avoids the long account/region hostname that requires DNS resolution.
-ECR_REGISTRY="localhost.localstack.cloud:4566"
-
-# Detect whether the runtime supports --tls-verify (podman yes, docker no).
-if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--tls-verify'; then
-  TLS_FLAG="--tls-verify=false"
-else
-  TLS_FLAG=""
-fi
+ECR_REGISTRY="${ACCOUNT}.dkr.ecr.${REGION}.localhost.localstack.cloud:4566"
 
 echo "==> Logging in to local ECR (${ECR_REGISTRY})"
 awslocal ecr get-login-password \
   | "${DOCKER_CMD}" login \
       --username AWS \
       --password-stdin \
-      ${TLS_FLAG} \
+      --tls-verify=false \
       "${ECR_REGISTRY}"
 
 FULL_IMAGE_URI="${ECR_REGISTRY}/${REPO_NAME}:latest"
 echo "==> Tagging and pushing (${FULL_IMAGE_URI})"
 "${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${FULL_IMAGE_URI}"
-"${DOCKER_CMD}" push ${TLS_FLAG} "${FULL_IMAGE_URI}"
+# Podman requires --format docker (LocalStack doesn't accept OCI format),
+# --tls-verify=false (self-signed cert), and --remove-signatures.
+# These flags are podman-specific; docker ignores unknown flags gracefully.
+if "${DOCKER_CMD}" push --help 2>&1 | grep -q -- '--format'; then
+  "${DOCKER_CMD}" push --format docker --tls-verify=false --remove-signatures "${FULL_IMAGE_URI}"
+else
+  "${DOCKER_CMD}" push "${FULL_IMAGE_URI}"
+fi
 
 IMAGE_URI="${FULL_IMAGE_URI}"
 echo "    Image URI: ${IMAGE_URI}"

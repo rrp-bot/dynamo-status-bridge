@@ -48,7 +48,6 @@ echo "Starting localstack/localstack-pro on port ${PORT} (network: ${NETWORK}) .
   -e "LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}" \
   -e "SERVICES=dynamodb,dynamodbstreams,lambda,ecr,rds" \
   -e "LAMBDA_DOCKER_NETWORK=${NETWORK}" \
-  -e "ECR_ENDPOINT_STRATEGY=off" \
   -e "DEBUG=0" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
   localstack/localstack-pro
