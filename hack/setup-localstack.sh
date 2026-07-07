@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
 # setup-localstack.sh — provisions all LocalStack resources needed for e2e testing:
-#   1. Creates a local ECR repository
-#   2. Builds the Lambda image (UBI9)
-#   3. Pushes the image to local ECR
-#   4. Creates the 3 DynamoDB status tables with streams
-#   5. Creates (or updates) the Lambda function
-#   6. Creates event source mappings (one per table)
+#   1. Creates an RDS PostgreSQL instance
+#   2. Creates a local ECR repository
+#   3. Builds the Lambda image (UBI9)
+#   4. Pushes the image to local ECR
+#   5. Creates the 3 DynamoDB status tables with streams
+#   6. Creates (or updates) the Lambda function
+#   7. Creates event source mappings (one per table)
 #
 # Prerequisites:
-#   - LocalStack Pro running:  ./hack/start-localstack.sh
-#   - Postgres running:        ./hack/start-postgres.sh
+#   - LocalStack Pro running: ./hack/start-localstack.sh
 #
 # Environment variables:
-#   LOCALSTACK_ENDPOINT   LocalStack endpoint (default: http://localhost:4566).
-#   LAMBDA_POSTGRES_DSN   DSN the Lambda uses to reach Postgres — must use the
-#                         container hostname, not localhost (default shown below).
-#   MC_NAME               Management cluster name prefix (default: mc01).
-#   DOCKER_CMD            Container runtime (default: docker). Set to 'podman' if needed.
+#   LOCALSTACK_ENDPOINT  LocalStack endpoint (default: http://localhost:4566).
+#   MC_NAME              Management cluster name prefix (default: mc01).
+#   DOCKER_CMD           Container runtime (default: docker). Set to 'podman' if needed.
 
 set -euo pipefail
 
@@ -28,9 +26,10 @@ LAMBDA_NAME="dynamo-status-bridge"
 REPO_NAME="dynamo-status-bridge"
 DOCKER_CMD="${DOCKER_CMD:-docker}"
 
-# DSN the Lambda container will use — must reference the Postgres container
-# hostname on the shared network, not localhost.
-LAMBDA_POSTGRES_DSN="${LAMBDA_POSTGRES_DSN:-postgres://test:test@postgres-dynamo-status-bridge:5432/statusbridge_test?sslmode=disable}"
+DB_INSTANCE_ID="statusbridge"
+DB_NAME="statusbridge"
+DB_USER="statusbridge"
+DB_PASSWORD="statusbridge"
 
 AWS_ARGS="--endpoint-url=${ENDPOINT} --region=${REGION} --no-cli-pager"
 awslocal() { aws ${AWS_ARGS} "$@"; }
@@ -53,7 +52,42 @@ for i in $(seq 1 30); do
 done
 
 # ---------------------------------------------------------------------------
-# 1. Create ECR repository
+# 1. Create RDS PostgreSQL instance
+# ---------------------------------------------------------------------------
+echo "==> Creating RDS PostgreSQL instance: ${DB_INSTANCE_ID}"
+awslocal rds create-db-instance \
+  --db-instance-identifier "${DB_INSTANCE_ID}" \
+  --engine postgres \
+  --db-name "${DB_NAME}" \
+  --master-username "${DB_USER}" \
+  --master-user-password "${DB_PASSWORD}" \
+  --db-instance-class db.t3.small \
+  --allocated-storage 20 \
+  2>/dev/null || echo "    (already exists)"
+
+echo "==> Waiting for RDS instance to become available..."
+awslocal rds wait db-instance-available --db-instance-identifier "${DB_INSTANCE_ID}"
+
+RDS_HOST=$(awslocal rds describe-db-instances \
+  --db-instance-identifier "${DB_INSTANCE_ID}" \
+  --query 'DBInstances[0].Endpoint.Address' \
+  --output text)
+RDS_PORT=$(awslocal rds describe-db-instances \
+  --db-instance-identifier "${DB_INSTANCE_ID}" \
+  --query 'DBInstances[0].Endpoint.Port' \
+  --output text)
+
+echo "    RDS endpoint: ${RDS_HOST}:${RDS_PORT}"
+
+# DSN for the Lambda container — reaches RDS inside LocalStack via the
+# LocalStack internal hostname. USE_IAM_AUTH=false for local testing.
+LAMBDA_POSTGRES_DSN="postgres://${DB_USER}:${DB_PASSWORD}@${RDS_HOST}:${RDS_PORT}/${DB_NAME}?sslmode=disable"
+
+# DSN for the test process on the host — RDS port is exposed on localhost.
+HOST_POSTGRES_DSN="postgres://${DB_USER}:${DB_PASSWORD}@localhost:${RDS_PORT}/${DB_NAME}?sslmode=disable"
+
+# ---------------------------------------------------------------------------
+# 2. Create ECR repository
 # ---------------------------------------------------------------------------
 echo "==> Creating ECR repository: ${REPO_NAME}"
 REPO_URI=$(awslocal ecr create-repository \
@@ -67,14 +101,14 @@ REPO_URI=$(awslocal ecr create-repository \
 echo "    Repository URI: ${REPO_URI}"
 
 # ---------------------------------------------------------------------------
-# 2. Build the Lambda image
+# 3. Build the Lambda image
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "==> Building Lambda image from ${REPO_ROOT}"
 "${DOCKER_CMD}" build -t "${REPO_NAME}:latest" "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
-# 3. Push to local ECR
+# 4. Push to local ECR
 # ---------------------------------------------------------------------------
 echo "==> Tagging and pushing to local ECR"
 "${DOCKER_CMD}" tag "${REPO_NAME}:latest" "${REPO_URI}:latest"
@@ -83,7 +117,7 @@ IMAGE_URI="${REPO_URI}:latest"
 echo "    Image URI: ${IMAGE_URI}"
 
 # ---------------------------------------------------------------------------
-# 4. Create DynamoDB status tables with streams
+# 5. Create DynamoDB status tables with streams
 # ---------------------------------------------------------------------------
 TABLE_TYPES=("applydesires" "deletedesires" "readdesires")
 declare -A STREAM_ARNS
@@ -111,14 +145,17 @@ for TABLE_TYPE in "${TABLE_TYPES[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# 5. Create or update the Lambda function
+# 6. Create or update the Lambda function
 # ---------------------------------------------------------------------------
 echo "==> Creating Lambda function: ${LAMBDA_NAME}"
 if awslocal lambda get-function --function-name "${LAMBDA_NAME}" >/dev/null 2>&1; then
-  echo "    (already exists, updating code)"
+  echo "    (already exists, updating code and config)"
   awslocal lambda update-function-code \
     --function-name "${LAMBDA_NAME}" \
     --image-uri "${IMAGE_URI}"
+  awslocal lambda update-function-configuration \
+    --function-name "${LAMBDA_NAME}" \
+    --environment "Variables={USE_IAM_AUTH=false,POSTGRES_DSN=${LAMBDA_POSTGRES_DSN}}"
 else
   awslocal lambda create-function \
     --function-name "${LAMBDA_NAME}" \
@@ -135,7 +172,7 @@ awslocal lambda wait function-active-v2 --function-name "${LAMBDA_NAME}"
 echo "    Lambda is active."
 
 # ---------------------------------------------------------------------------
-# 6. Create event source mappings
+# 7. Create event source mappings
 # ---------------------------------------------------------------------------
 for TABLE_TYPE in "${TABLE_TYPES[@]}"; do
   STREAM_ARN="${STREAM_ARNS[${TABLE_TYPE}]}"
@@ -152,8 +189,10 @@ done
 echo ""
 echo "==> Setup complete!"
 echo ""
+echo "RDS endpoint (host):    ${RDS_HOST}:${RDS_PORT}"
+echo ""
 echo "Run e2e tests with:"
 echo "  LOCALSTACK_ENDPOINT=${ENDPOINT} \\"
-echo "  POSTGRES_DSN=postgres://test:test@localhost:5432/statusbridge_test?sslmode=disable \\"
+echo "  POSTGRES_DSN=${HOST_POSTGRES_DSN} \\"
 echo "  MC_NAME=${MC_NAME} \\"
 echo "  go test ./test/e2e/... -v -timeout 180s"

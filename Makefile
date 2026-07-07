@@ -11,25 +11,28 @@ test:
 	go test ./... -count=1
 
 # integration-test: runs handler tests directly against a local Postgres.
-# Requires: POSTGRES_DSN
+# Requires: POSTGRES_DSN (use hack/start-postgres.sh for a local Postgres container).
 integration-test:
 	go test ./test/integration/... -v -count=1 -timeout 120s
 
-# e2e: runs end-to-end tests against the Lambda running inside LocalStack.
-# Requires: LOCALSTACK_ENDPOINT, POSTGRES_DSN, MC_NAME (default: mc01)
-# Run hack/start-localstack.sh + hack/start-postgres.sh + hack/setup-localstack.sh first.
+# e2e: runs end-to-end tests against the Lambda running inside LocalStack Pro.
+# RDS is provisioned inside LocalStack — no separate Postgres container needed.
+# Run hack/start-localstack.sh + hack/setup-localstack.sh first.
+# Requires: LOCALSTACK_ENDPOINT, POSTGRES_DSN (printed by setup-localstack.sh), MC_NAME (default: mc01)
 e2e:
 	go test ./test/e2e/... -v -count=1 -timeout 180s
 
 localstack:
 	./hack/start-localstack.sh
 
+# postgres: starts a local Postgres container for integration tests only (not e2e).
+# e2e tests use RDS inside LocalStack instead.
 postgres:
 	./hack/start-postgres.sh
 
-# setup-localstack: builds + pushes image to local ECR, creates DynamoDB tables,
-# Lambda function, and event source mappings. Requires LocalStack + Postgres running.
-# Requires: LOCALSTACK_ENDPOINT, LAMBDA_POSTGRES_DSN
+# setup-localstack: creates RDS, ECR, builds + pushes image, creates DynamoDB tables,
+# Lambda function, and event source mappings. Requires LocalStack Pro running.
+# Requires: LOCALSTACK_ENDPOINT (default: http://localhost:4566)
 setup-localstack:
 	./hack/setup-localstack.sh
 

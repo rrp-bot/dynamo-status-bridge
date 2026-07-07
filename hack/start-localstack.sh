@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # start-localstack.sh — starts a LocalStack Pro container with DynamoDB,
-# DynamoDB Streams, Lambda, and ECR enabled.
+# DynamoDB Streams, Lambda, ECR, and RDS enabled.
 #
-# Lambda container image support requires LocalStack Pro and the Docker/Podman
-# socket mounted so LocalStack can spin up Lambda containers.
-# A shared network is created so Lambda containers can reach the Postgres
-# container by hostname.
+# Lambda container image support and RDS require LocalStack Pro.
+# The Docker/Podman socket is mounted so LocalStack can spin up Lambda
+# containers. A shared network is created so Lambda containers can reach
+# the RDS instance running inside LocalStack.
 #
 # Usage: ./hack/start-localstack.sh
 # Stop with: ${DOCKER_CMD} stop localstack-dynamo-status-bridge
@@ -27,7 +27,7 @@ DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
 NETWORK="${DOCKER_NETWORK:-dsb-local}"
 
 if [[ -z "${LOCALSTACK_AUTH_TOKEN:-}" ]]; then
-  echo "ERROR: LOCALSTACK_AUTH_TOKEN is required (Lambda container image support needs LocalStack Pro)."
+  echo "ERROR: LOCALSTACK_AUTH_TOKEN is required (Lambda + RDS support needs LocalStack Pro)."
   echo "       Export LOCALSTACK_AUTH_TOKEN=<your-token> and re-run."
   exit 1
 fi
@@ -44,8 +44,9 @@ echo "Starting localstack/localstack-pro on port ${PORT} (network: ${NETWORK}) .
   --name "${CONTAINER_NAME}" \
   --network "${NETWORK}" \
   -p "${PORT}:4566" \
+  -p "4510-4560:4510-4560" \
   -e "LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}" \
-  -e "SERVICES=dynamodb,dynamodbstreams,lambda,ecr" \
+  -e "SERVICES=dynamodb,dynamodbstreams,lambda,ecr,rds" \
   -e "LAMBDA_DOCKER_NETWORK=${NETWORK}" \
   -e "DEBUG=0" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
